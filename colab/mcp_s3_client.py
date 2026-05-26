@@ -41,9 +41,9 @@ def _real_stdio_for_mcp() -> Iterator[None]:
     saved = sys.stdin, sys.stdout, sys.stderr
     opened: list[TextIO] = []
     try:
-        for fd in (0, 1, 2):
+        for path, mode in (("/dev/fd/0", "r"), ("/dev/fd/1", "w"), ("/dev/fd/2", "w")):
             try:
-                opened.append(open(os.dup(fd), closefd=True))
+                opened.append(open(path, mode, buffering=1, closefd=True))
             except OSError:
                 continue
         if len(opened) == 3:
@@ -58,8 +58,19 @@ def _real_stdio_for_mcp() -> Iterator[None]:
         sys.stdin, sys.stdout, sys.stderr = saved
 
 
-def _mcp_stdio_client(params: StdioServerParameters):
+def run_notebook_async(coro):  # noqa: ANN001
+    """Run an async coroutine from a Colab cell (real stdio + nested event loop)."""
+    import nest_asyncio
+
+    with _real_stdio_for_mcp():
+        nest_asyncio.apply()
+        return asyncio.run(coro)
+
+
+def _mcp_stdio_client(params: StdioServerParameters, *, errlog: TextIO | None = None):
     """Notebook-safe stdio transport (avoids mocked sys.stderr)."""
+    if errlog is not None:
+        return stdio_client(params, errlog=errlog)
     if _running_in_notebook():
         return stdio_client(params, errlog=None)
     return stdio_client(params)
@@ -241,6 +252,7 @@ class AwsMcpS3Client:
         self._call_timeout_sec = call_timeout_sec
         self._session: ClientSession | None = None
         self._transport = None
+        self._errlog: TextIO | None = None
 
     @staticmethod
     def _default_workdir() -> Path:
@@ -270,7 +282,11 @@ class AwsMcpS3Client:
             env=self._server_env(),
         )
         with _real_stdio_for_mcp():
-            self._transport = _mcp_stdio_client(params)
+            if _running_in_notebook():
+                self._errlog = open(os.devnull, "w")
+                self._transport = _mcp_stdio_client(params, errlog=self._errlog)
+            else:
+                self._transport = _mcp_stdio_client(params)
             try:
                 read, write = await asyncio.wait_for(
                     self._transport.__aenter__(),
@@ -278,22 +294,33 @@ class AwsMcpS3Client:
                 )
             except Exception:
                 await self._cleanup_transport(None, None, None)
+                self._close_errlog()
                 raise
-        self._session = ClientSession(read, write)
-        try:
-            await asyncio.wait_for(
-                self._session.__aenter__(),
-                timeout=MCP_CONNECT_TIMEOUT_SEC,
-            )
-            await asyncio.wait_for(
-                self._session.initialize(),
-                timeout=MCP_CONNECT_TIMEOUT_SEC,
-            )
-        except Exception as exc:
-            await self._cleanup_session(None, exc, None)
-            await self._cleanup_transport(None, exc, None)
-            raise
+
+            self._session = ClientSession(read, write)
+            try:
+                await asyncio.wait_for(
+                    self._session.__aenter__(),
+                    timeout=MCP_CONNECT_TIMEOUT_SEC,
+                )
+                await asyncio.wait_for(
+                    self._session.initialize(),
+                    timeout=MCP_CONNECT_TIMEOUT_SEC,
+                )
+            except Exception as exc:
+                await self._cleanup_session(None, exc, None)
+                await self._cleanup_transport(None, exc, None)
+                self._close_errlog()
+                raise
         return self
+
+    def _close_errlog(self) -> None:
+        if self._errlog is not None:
+            try:
+                self._errlog.close()
+            except OSError:
+                pass
+            self._errlog = None
 
     async def _cleanup_session(self, exc_type, exc, tb) -> None:
         if self._session is not None:
@@ -308,6 +335,7 @@ class AwsMcpS3Client:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self._cleanup_session(exc_type, exc, tb)
         await self._cleanup_transport(exc_type, exc, tb)
+        self._close_errlog()
 
     async def aclose(self) -> None:
         """Explicit shutdown for notebook interrupt handlers."""
