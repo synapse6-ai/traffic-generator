@@ -1,0 +1,6 @@
+{
+  "python.analysis.extraPaths": ["."],
+  "jupyter.analysis.extraPaths": ["."],
+  "python.analysis.diagnosticMode": "workspace",
+  "python.autoComplete.extraPaths": ["."]
+}

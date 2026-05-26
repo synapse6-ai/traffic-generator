@@ -1,4 +1,10 @@
 {
   "include": ["colab"],
-  "extraPaths": ["colab"]
+  "extraPaths": ["colab", "colab/"],
+  "executionEnvironments": [
+    {
+      "root": "colab",
+      "extraPaths": ["colab"]
+    }
+  ]
 }

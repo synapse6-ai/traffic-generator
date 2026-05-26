@@ -1,0 +1,7 @@
+[tool.pyright]
+include = ["colab"]
+extraPaths = ["colab"]
+
+[tool.basedpyright]
+include = ["colab"]
+extraPaths = ["colab"]

@@ -1,4 +1,16 @@
 {
-  "python.analysis.extraPaths": ["colab"],
-  "jupyter.notebookFileRoot": "${workspaceFolder}/colab"
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/colab",
+    "colab"
+  ],
+  "jupyter.analysis.extraPaths": [
+    "${workspaceFolder}/colab",
+    "colab"
+  ],
+  "python.analysis.diagnosticMode": "workspace",
+  "jupyter.notebookFileRoot": "${workspaceFolder}/colab",
+  "python.autoComplete.extraPaths": [
+    "${workspaceFolder}/colab",
+    "colab"
+  ]
 }
