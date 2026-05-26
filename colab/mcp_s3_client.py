@@ -31,40 +31,51 @@ def _running_in_notebook() -> bool:
     return shell in ("ZMQInteractiveShell", "GoogleColabShell", "TerminalInteractiveShell")
 
 
+class _StderrFilenoProxy:
+    """Give subprocess a real stderr fileno; keep Colab display on the original stream."""
+
+    def __init__(self, display: Any, backing: TextIO) -> None:
+        self._display = display
+        self._backing = backing
+
+    def fileno(self) -> int:
+        return self._backing.fileno()
+
+    def write(self, data: str) -> int:
+        return self._display.write(data)
+
+    def flush(self) -> None:
+        self._display.flush()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._display, name)
+
+
 @contextlib.contextmanager
 def _real_stdio_for_mcp() -> Iterator[None]:
-    """Colab/Jupyter replace sys.std*; MCP stdio spawn needs real OS streams."""
+    """Colab/Jupyter OutStream has no fileno(); MCP subprocess creation needs one."""
     if not _running_in_notebook():
         yield
         return
 
-    saved = sys.stdin, sys.stdout, sys.stderr
-    opened: list[TextIO] = []
+    saved_stderr = sys.stderr
+    backing = open(os.devnull, "w")
     try:
-        for path, mode in (("/dev/fd/0", "r"), ("/dev/fd/1", "w"), ("/dev/fd/2", "w")):
-            try:
-                opened.append(open(path, mode, buffering=1, closefd=True))
-            except OSError:
-                continue
-        if len(opened) == 3:
-            sys.stdin, sys.stdout, sys.stderr = opened[0], opened[1], opened[2]
+        sys.stderr = _StderrFilenoProxy(saved_stderr, backing)
         yield
     finally:
-        for stream in opened:
-            try:
-                stream.close()
-            except OSError:
-                pass
-        sys.stdin, sys.stdout, sys.stderr = saved
+        sys.stderr = saved_stderr
+        backing.close()
 
 
 def run_notebook_async(coro):  # noqa: ANN001
-    """Run an async coroutine from a Colab cell (real stdio + nested event loop)."""
+    """Run an async coroutine from a Colab cell (nested event loop + stderr fileno)."""
     import nest_asyncio
 
+    nest_asyncio.apply()
+    loop = asyncio.get_event_loop()
     with _real_stdio_for_mcp():
-        nest_asyncio.apply()
-        return asyncio.run(coro)
+        return loop.run_until_complete(coro)
 
 
 def _mcp_stdio_client(params: StdioServerParameters, *, errlog: TextIO | None = None):
