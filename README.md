@@ -1,19 +1,25 @@
-# traffic-generator
+# Traffic generator
 
-A traffic generator for testing AI guardrails, with implementations for two execution environments.
+Tools for generating sample traffic so you can test how **InstantEvidence** responds to real-world activity.
 
-## Structure
+## What's included
 
-- `colab/` — Google Colab S3 traffic generator via AWS MCP (`awslabs.aws-api-mcp-server`)
-- `claude/` — Claude API-based traffic generator
+| Folder | Purpose |
+|--------|---------|
+| `colab/` | S3 object traffic from Google Colab (recommended for AWS bucket demos) |
+| `claude/` | Traffic generation via the Claude API |
 
-## Colab (S3 via MCP)
+## S3 traffic in Google Colab
 
-1. Open `colab/s3_traffic_generator_mcp_colab.ipynb` in Google Colab.
-2. Set Colab secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional `AWS_REGION`.
-3. Run all cells. Upload the three helper `.py` files if prompted.
+Best for demos and integration checks against a live S3 bucket wired to InstantEvidence.
 
-Tests:
+1. Open [`colab/s3_traffic_generator_mcp_colab.ipynb`](colab/s3_traffic_generator_mcp_colab.ipynb) in [Google Colab](https://colab.research.google.com/).
+2. In Colab **Secrets**, add `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Optionally set `AWS_REGION` (default `us-east-1`).
+3. Set **BUCKET** to your InstantEvidence-monitored bucket, then **Runtime → Run all**.
+
+The notebook is self-contained—no extra files to download or upload.
+
+### Verifying locally (developers)
 
 ```bash
 cd colab && python3 -m pytest tests/ -q
