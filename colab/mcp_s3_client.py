@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shlex
@@ -10,7 +11,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, TextIO
 from urllib.parse import quote
 
 from mcp import ClientSession, StdioServerParameters
@@ -20,6 +21,48 @@ from aws_credentials import AwsCredentials
 
 MCP_CONNECT_TIMEOUT_SEC = 20.0
 MCP_CALL_TIMEOUT_SEC = 15.0
+
+
+def _running_in_notebook() -> bool:
+    try:
+        shell = get_ipython().__class__.__name__  # type: ignore[name-defined]
+    except NameError:
+        return False
+    return shell in ("ZMQInteractiveShell", "GoogleColabShell", "TerminalInteractiveShell")
+
+
+@contextlib.contextmanager
+def _real_stdio_for_mcp() -> Iterator[None]:
+    """Colab/Jupyter replace sys.std*; MCP stdio spawn needs real OS streams."""
+    if not _running_in_notebook():
+        yield
+        return
+
+    saved = sys.stdin, sys.stdout, sys.stderr
+    opened: list[TextIO] = []
+    try:
+        for fd in (0, 1, 2):
+            try:
+                opened.append(open(os.dup(fd), closefd=True))
+            except OSError:
+                continue
+        if len(opened) == 3:
+            sys.stdin, sys.stdout, sys.stderr = opened[0], opened[1], opened[2]
+        yield
+    finally:
+        for stream in opened:
+            try:
+                stream.close()
+            except OSError:
+                pass
+        sys.stdin, sys.stdout, sys.stderr = saved
+
+
+def _mcp_stdio_client(params: StdioServerParameters):
+    """Notebook-safe stdio transport (avoids mocked sys.stderr)."""
+    if _running_in_notebook():
+        return stdio_client(params, errlog=None)
+    return stdio_client(params)
 
 
 class McpS3Error(Exception):
@@ -226,16 +269,16 @@ class AwsMcpS3Client:
             args=["-m", "awslabs.aws_api_mcp_server.server"],
             env=self._server_env(),
         )
-        self._transport = stdio_client(params)
-        try:
-            read, write = await asyncio.wait_for(
-                self._transport.__aenter__(),
-                timeout=MCP_CONNECT_TIMEOUT_SEC,
-            )
-        except Exception:
-            await self._cleanup_transport(None, None, None)
-            raise
-
+        with _real_stdio_for_mcp():
+            self._transport = _mcp_stdio_client(params)
+            try:
+                read, write = await asyncio.wait_for(
+                    self._transport.__aenter__(),
+                    timeout=MCP_CONNECT_TIMEOUT_SEC,
+                )
+            except Exception:
+                await self._cleanup_transport(None, None, None)
+                raise
         self._session = ClientSession(read, write)
         try:
             await asyncio.wait_for(
