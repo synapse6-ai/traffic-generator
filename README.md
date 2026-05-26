@@ -17,7 +17,12 @@ Best for demos and integration checks against a live S3 bucket wired to InstantE
 2. In Colab **Secrets**, add `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Optionally set `AWS_REGION` (default `us-east-1`).
 3. Set **BUCKET** to your InstantEvidence-monitored bucket, then **Runtime → Run all**.
 
-The notebook is self-contained—`colab/` contains only this `.ipynb`; nothing else to download or upload.
+Open the notebook from this repo in Colab so `colab/` loads together:
+
+- `s3_traffic_generator_mcp_colab.ipynb` — runbook and parameters
+- `aws_credentials.py` — Colab secrets / env resolution
+- `mcp_s3_client.py` — S3 calls via AWS API MCP (`call_aws`)
+- `traffic_generator.py` — traffic loop and operation selection
 
 ## License
 
