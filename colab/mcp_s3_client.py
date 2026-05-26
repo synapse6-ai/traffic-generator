@@ -25,14 +25,41 @@ MCP_CALL_TIMEOUT_SEC = 15.0
 
 def _running_in_notebook() -> bool:
     try:
-        shell = get_ipython().__class__.__name__  # type: ignore[name-defined]
+        get_ipython  # type: ignore[name-defined]
     except NameError:
         return False
-    return shell in ("ZMQInteractiveShell", "GoogleColabShell", "TerminalInteractiveShell")
+    return True
 
 
-class _StderrFilenoProxy:
-    """Give subprocess a real stderr fileno; keep Colab display on the original stream."""
+_colab_stream_patch_applied = False
+
+
+def _patch_colab_outstream_fileno() -> None:
+    """ipykernel OutStream raises UnsupportedOperation on fileno(); MCP spawn needs it."""
+    global _colab_stream_patch_applied
+    if _colab_stream_patch_applied or not _running_in_notebook():
+        return
+    try:
+        import io
+
+        from ipykernel.iostream import OutStream
+    except ImportError:
+        return
+
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+
+    def _fileno(self: Any) -> int:
+        copy = getattr(self, "_original_stdstream_copy", None)
+        if copy is not None:
+            return copy
+        return os.dup(devnull_fd)
+
+    OutStream.fileno = _fileno  # type: ignore[method-assign]
+    _colab_stream_patch_applied = True
+
+
+class _StreamFilenoProxy:
+    """Give subprocess a real fileno; keep Colab display on the original stream."""
 
     def __init__(self, display: Any, backing: TextIO) -> None:
         self._display = display
@@ -58,20 +85,30 @@ def _real_stdio_for_mcp() -> Iterator[None]:
         yield
         return
 
-    saved_stderr = sys.stderr
-    backing = open(os.devnull, "w")
+    _patch_colab_outstream_fileno()
+    saved_out, saved_err = sys.stdout, sys.stderr
+    out_back = open(os.devnull, "w")
+    err_back = open(os.devnull, "w")
     try:
-        sys.stderr = _StderrFilenoProxy(saved_stderr, backing)
+        sys.stdout = _StreamFilenoProxy(saved_out, out_back)
+        sys.stderr = _StreamFilenoProxy(saved_err, err_back)
         yield
     finally:
-        sys.stderr = saved_stderr
-        backing.close()
+        sys.stdout = saved_out
+        sys.stderr = saved_err
+        out_back.close()
+        err_back.close()
+
+
+def _notebook_errlog() -> TextIO:
+    return open(os.devnull, "w")
 
 
 def run_notebook_async(coro):  # noqa: ANN001
-    """Run an async coroutine from a Colab cell (nested event loop + stderr fileno)."""
+    """Run an async coroutine from a Colab cell (nested event loop + stream fileno)."""
     import nest_asyncio
 
+    _patch_colab_outstream_fileno()
     nest_asyncio.apply()
     loop = asyncio.get_event_loop()
     with _real_stdio_for_mcp():
@@ -79,11 +116,11 @@ def run_notebook_async(coro):  # noqa: ANN001
 
 
 def _mcp_stdio_client(params: StdioServerParameters, *, errlog: TextIO | None = None):
-    """Notebook-safe stdio transport (avoids mocked sys.stderr)."""
+    """Notebook-safe stdio transport (real stderr file, never Colab OutStream)."""
     if errlog is not None:
         return stdio_client(params, errlog=errlog)
     if _running_in_notebook():
-        return stdio_client(params, errlog=None)
+        return stdio_client(params, errlog=_notebook_errlog())
     return stdio_client(params)
 
 
@@ -294,7 +331,7 @@ class AwsMcpS3Client:
         )
         with _real_stdio_for_mcp():
             if _running_in_notebook():
-                self._errlog = open(os.devnull, "w")
+                self._errlog = _notebook_errlog()
                 self._transport = _mcp_stdio_client(params, errlog=self._errlog)
             else:
                 self._transport = _mcp_stdio_client(params)
