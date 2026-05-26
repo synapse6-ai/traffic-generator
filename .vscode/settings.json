@@ -1,0 +1,4 @@
+{
+  "python.analysis.extraPaths": ["colab"],
+  "jupyter.notebookFileRoot": "${workspaceFolder}/colab"
+}
