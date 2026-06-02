@@ -1,4 +1,4 @@
-"""AWS S3 CRUD via awslabs.aws-api-mcp-server ``call_aws`` tool."""
+"""S3 upload/list via awslabs.aws-api-mcp-server ``call_aws`` tool."""
 
 from __future__ import annotations
 
@@ -8,19 +8,17 @@ import json
 import os
 import shlex
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, TextIO
-from urllib.parse import quote
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from aws_credentials import AwsCredentials
 
-MCP_CONNECT_TIMEOUT_SEC = 20.0
-MCP_CALL_TIMEOUT_SEC = 15.0
+MCP_CONNECT_TIMEOUT_SEC = 30.0
+MCP_CALL_TIMEOUT_SEC = 120.0
 
 
 def _running_in_notebook() -> bool:
@@ -140,21 +138,12 @@ class S3OperationResult:
         return self.error is None
 
 
-def format_copy_source(bucket: str, source_key: str) -> str:
-    """URL-encode the key portion for ``aws s3api copy-object --copy-source``."""
-    return f"{bucket}/{quote(source_key, safe='/')}"
-
-
 def _region_flag(region: str) -> str:
     return f"--region {shlex.quote(region)}"
 
 
 def build_head_bucket_command(bucket: str, region: str) -> str:
     return f"aws s3api head-bucket --bucket {shlex.quote(bucket)} {_region_flag(region)}"
-
-
-def build_list_buckets_command(region: str) -> str:
-    return f"aws s3api list-buckets {_region_flag(region)}"
 
 
 def build_list_objects_command(
@@ -185,36 +174,6 @@ def build_put_object_command(
         f"aws s3api put-object --bucket {shlex.quote(bucket)} "
         f"--key {shlex.quote(key)} --body {shlex.quote(str(body_path))} "
         f"--content-type {shlex.quote(content_type)} {_region_flag(region)}"
-    )
-
-
-def build_get_object_command(bucket: str, key: str, out_path: Path | str, region: str) -> str:
-    return (
-        f"aws s3api get-object --bucket {shlex.quote(bucket)} "
-        f"--key {shlex.quote(key)} {shlex.quote(str(out_path))} {_region_flag(region)}"
-    )
-
-
-def build_head_object_command(bucket: str, key: str, region: str) -> str:
-    return (
-        f"aws s3api head-object --bucket {shlex.quote(bucket)} "
-        f"--key {shlex.quote(key)} {_region_flag(region)}"
-    )
-
-
-def build_copy_object_command(bucket: str, source_key: str, dest_key: str, region: str) -> str:
-    copy_source = format_copy_source(bucket, source_key)
-    return (
-        f"aws s3api copy-object --bucket {shlex.quote(bucket)} "
-        f"--copy-source {shlex.quote(copy_source)} "
-        f"--key {shlex.quote(dest_key)} {_region_flag(region)}"
-    )
-
-
-def build_delete_object_command(bucket: str, key: str, region: str) -> str:
-    return (
-        f"aws s3api delete-object --bucket {shlex.quote(bucket)} "
-        f"--key {shlex.quote(key)} {_region_flag(region)}"
     )
 
 
@@ -282,19 +241,17 @@ def parse_call_aws_row(cli_command: str, row: dict[str, Any]) -> S3OperationResu
 
 
 class AwsMcpS3Client:
-    """Thin wrapper around AWS API MCP server for S3 object CRUD."""
+    """Thin wrapper around AWS API MCP server for S3 head/list/put."""
 
     def __init__(
         self,
         credentials: AwsCredentials,
         *,
-        read_only: bool = False,
         region: str | None = None,
         workdir: Path | None = None,
         call_timeout_sec: float = MCP_CALL_TIMEOUT_SEC,
     ) -> None:
         self.credentials = credentials
-        self.read_only = read_only
         self.region = region or credentials.region
         self._workdir = workdir or self._default_workdir()
         self._call_timeout_sec = call_timeout_sec
@@ -310,18 +267,10 @@ class AwsMcpS3Client:
 
     def _server_env(self) -> dict[str, str]:
         env = self.credentials.to_env()
-        env["READ_OPERATIONS_ONLY"] = "true" if self.read_only else "false"
+        env["READ_OPERATIONS_ONLY"] = "false"
         env["AWS_API_MCP_TELEMETRY"] = "false"
         env["AWS_API_MCP_WORKING_DIR"] = str(self._workdir)
         return env
-
-    def _write_temp_file(self, body: str, *, suffix: str = ".txt") -> Path:
-        name = f"mcp-s3-{uuid.uuid4().hex}{suffix}"
-        path = self._workdir / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(body)
-        return path
 
     async def __aenter__(self) -> AwsMcpS3Client:
         params = StdioServerParameters(
@@ -416,9 +365,6 @@ class AwsMcpS3Client:
     async def head_bucket(self, bucket: str) -> S3OperationResult:
         return await self.call_aws(build_head_bucket_command(bucket, self.region))
 
-    async def list_buckets(self) -> S3OperationResult:
-        return await self.call_aws(build_list_buckets_command(self.region))
-
     async def list_objects(
         self,
         bucket: str,
@@ -430,48 +376,22 @@ class AwsMcpS3Client:
             build_list_objects_command(bucket, self.region, prefix=prefix, max_keys=max_keys)
         )
 
-    async def put_object(
+    async def put_object_file(
         self,
         bucket: str,
         key: str,
-        body: str,
+        file_path: Path | str,
         *,
-        content_type: str = "text/plain",
+        content_type: str = "application/octet-stream",
     ) -> S3OperationResult:
-        payload_path = self._write_temp_file(body)
-        try:
-            cmd = build_put_object_command(
-                bucket, key, payload_path, self.region, content_type=content_type
+        """Upload a local file via ``aws s3api put-object`` (no temp copy)."""
+        path = Path(file_path)
+        if not path.is_file():
+            return S3OperationResult(
+                command=f"put-object {bucket}/{key}",
+                error=f"File not found: {path}",
             )
-            return await self.call_aws(cmd)
-        finally:
-            payload_path.unlink(missing_ok=True)
-
-    async def get_object(self, bucket: str, key: str) -> S3OperationResult:
-        out_path = self._workdir / f"mcp-s3-get-{uuid.uuid4().hex}.bin"
-        try:
-            result = await self.call_aws(
-                build_get_object_command(bucket, key, out_path, self.region)
-            )
-            if result.ok and out_path.exists():
-                preview = out_path.read_bytes()[:500].decode("utf-8", errors="replace")
-                result.data = {**(result.data or {}), "BodyPreview": preview}
-            return result
-        finally:
-            out_path.unlink(missing_ok=True)
-
-    async def head_object(self, bucket: str, key: str) -> S3OperationResult:
-        return await self.call_aws(build_head_object_command(bucket, key, self.region))
-
-    async def copy_object(
-        self,
-        bucket: str,
-        source_key: str,
-        dest_key: str,
-    ) -> S3OperationResult:
-        return await self.call_aws(
-            build_copy_object_command(bucket, source_key, dest_key, self.region)
+        cmd = build_put_object_command(
+            bucket, key, path, self.region, content_type=content_type
         )
-
-    async def delete_object(self, bucket: str, key: str) -> S3OperationResult:
-        return await self.call_aws(build_delete_object_command(bucket, key, self.region))
+        return await self.call_aws(cmd)

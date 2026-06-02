@@ -42,22 +42,25 @@ def _colab_secret(name: str) -> str | None:
         return None
     try:
         value = userdata.get(name)
-    except Exception:
-        return None
+    except Exception as exc:
+        if type(exc).__name__ in ("SecretNotFoundError", "UserDataArgumentError"):
+            return None
+        raise RuntimeError(f"Colab secret {name!r}: {exc}") from exc
     return value.strip() if value else None
 
 
-def _lookup(name: str) -> str | None:
+def lookup_env(name: str) -> str | None:
+    """Colab secret first, then environment variable."""
     value = _colab_secret(name) or os.getenv(name)
     return value.strip() if value else None
 
 
 def resolve_aws_credentials() -> AwsCredentials:
     """Load AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY from Colab secrets or env."""
-    access_key_id = _lookup(AWS_ACCESS_KEY_ID)
-    secret_access_key = _lookup(AWS_SECRET_ACCESS_KEY)
-    region = _lookup(AWS_REGION) or DEFAULT_REGION
-    session_token = _lookup(AWS_SESSION_TOKEN)
+    access_key_id = lookup_env(AWS_ACCESS_KEY_ID)
+    secret_access_key = lookup_env(AWS_SECRET_ACCESS_KEY)
+    region = lookup_env(AWS_REGION) or DEFAULT_REGION
+    session_token = lookup_env(AWS_SESSION_TOKEN)
 
     if not access_key_id or not secret_access_key:
         raise CredentialError(

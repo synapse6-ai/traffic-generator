@@ -1,28 +1,55 @@
-# Traffic generator
+# S3 upload and PII check (Colab)
 
-Tools for generating sample traffic so you can test how **InstantEvidence** responds to real-world activity.
+Use this repo’s **Google Colab notebook** to upload files from your computer into an **S3 bucket** monitored by **InstantEvidence** (GuardrailStudio), then see **PII vs non-PII** classification through the product’s MCP tools.
 
-## What's included
+No synthetic traffic generator and no AWS CLI required for the demo flow.
 
-| Folder | Purpose |
-|--------|---------|
-| `colab/` | S3 object traffic from Google Colab (recommended for AWS bucket demos) |
-| `claude/` | Traffic generation via the Claude API |
+## Who this is for
 
-## S3 traffic in Google Colab
+- Engineers or solutions folks **testing InstantEvidence** against a real bucket  
+- Anyone who needs a **repeatable upload + PII check** without writing custom scripts  
 
-Best for demos and integration checks against a live S3 bucket wired to InstantEvidence.
+## What happens end-to-end
 
-1. Open [`colab/s3_traffic_generator_mcp_colab.ipynb`](colab/s3_traffic_generator_mcp_colab.ipynb) in [Google Colab](https://colab.research.google.com/).
-2. In Colab **Secrets**, add `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Optionally set `AWS_REGION` (default `us-east-1`).
-3. Set **BUCKET** to your InstantEvidence-monitored bucket, then **Runtime → Run all**.
+1. You add **Colab secrets** (AWS keys + InstantEvidence MCP URL and API key).  
+2. You **pick files** on your laptop; Colab holds them temporarily.  
+3. The notebook **uploads** them to your S3 bucket under a prefix (e.g. `uploads/`).  
+4. You **list** the bucket to confirm objects exist in AWS.  
+5. You query **InstantEvidence** for PII status and governed inventory (may take a few minutes after upload).  
 
-Open the notebook from this repo in Colab so `colab/` loads together:
+## Quick start (Colab)
 
-- `s3_traffic_generator_mcp_colab.ipynb` — runbook and parameters
-- `aws_credentials.py` — Colab secrets / env resolution
-- `mcp_s3_client.py` — S3 calls via AWS API MCP (`call_aws`)
-- `traffic_generator.py` — traffic loop and operation selection
+1. Open **[`colab/s3_upload_and_classify.ipynb`](colab/s3_upload_and_classify.ipynb)** in [Google Colab](https://colab.research.google.com/) (best: **File → Open notebook → GitHub** and select this repo).  
+2. In Colab, open **Secrets** (key icon) and add:
+
+   | Secret | Notes |
+   |--------|--------|
+   | `AWS_ACCESS_KEY_ID` | IAM user limited to your test bucket |
+   | `AWS_SECRET_ACCESS_KEY` | Matching secret |
+   | `AWS_REGION` | Optional; defaults to `us-east-1` |
+   | `GUARDRAILSTUDIO_MCP_URL` | From InstantEvidence **Settings → MCP** (must end with `/v1/mcp`) |
+   | `GUARDRAILSTUDIO_MCP_TOKEN` | `gks_live_…` from **Settings → API keys** |
+
+3. In the notebook, set **BUCKET** to the same bucket InstantEvidence monitors.  
+4. **Runtime → Run all**, or follow the numbered steps in the notebook.  
+
+The notebook includes step-by-step explanations, expected output, and a troubleshooting table.
+
+## Repo layout
+
+| Path | Purpose |
+|------|---------|
+| [`colab/s3_upload_and_classify.ipynb`](colab/s3_upload_and_classify.ipynb) | User-facing runbook (start here) |
+| [`colab/colab_bootstrap.py`](colab/colab_bootstrap.py) | Loads helpers; reuses MCP connections |
+| [`colab/aws_credentials.py`](colab/aws_credentials.py) | AWS secrets / env |
+| [`colab/mcp_s3_client.py`](colab/mcp_s3_client.py) | S3 via AWS API MCP |
+| [`colab/guardrail_mcp_client.py`](colab/guardrail_mcp_client.py) | InstantEvidence MCP |
+
+## Advanced
+
+- **Test a Git branch:** in Colab, set `COLAB_HELPERS_RAW_BASE` to  
+  `https://raw.githubusercontent.com/synapse6-ai/traffic-generator/<branch>/colab`
+- **Developers:** `cd colab && python -m pytest tests/ -q`
 
 ## License
 
