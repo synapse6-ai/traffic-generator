@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import shlex
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -270,7 +271,6 @@ class AwsMcpS3Client:
         env["READ_OPERATIONS_ONLY"] = "false"
         env["AWS_API_MCP_TELEMETRY"] = "false"
         env["AWS_API_MCP_WORKING_DIR"] = str(self._workdir)
-        env["AWS_API_MCP_ALLOW_UNRESTRICTED_LOCAL_FILE_ACCESS"] = "unrestricted"
         return env
 
     async def __aenter__(self) -> AwsMcpS3Client:
@@ -385,14 +385,23 @@ class AwsMcpS3Client:
         *,
         content_type: str = "application/octet-stream",
     ) -> S3OperationResult:
-        """Upload a local file via ``aws s3api put-object`` (no temp copy)."""
-        path = Path(file_path)
-        if not path.is_file():
+        """Upload a local file via ``aws s3api put-object``.
+
+        Copies to the MCP workdir first — the AWS API MCP server restricts
+        file reads to its working directory by default.
+        """
+        src = Path(file_path)
+        if not src.is_file():
             return S3OperationResult(
                 command=f"put-object {bucket}/{key}",
-                error=f"File not found: {path}",
+                error=f"File not found: {src}",
             )
-        cmd = build_put_object_command(
-            bucket, key, path, self.region, content_type=content_type
-        )
-        return await self.call_aws(cmd)
+        staging = self._workdir / src.name
+        try:
+            shutil.copy2(src, staging)
+            cmd = build_put_object_command(
+                bucket, key, staging, self.region, content_type=content_type
+            )
+            return await self.call_aws(cmd)
+        finally:
+            staging.unlink(missing_ok=True)
