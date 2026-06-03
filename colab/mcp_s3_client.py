@@ -270,6 +270,7 @@ class AwsMcpS3Client:
         env["READ_OPERATIONS_ONLY"] = "false"
         env["AWS_API_MCP_TELEMETRY"] = "false"
         env["AWS_API_MCP_WORKING_DIR"] = str(self._workdir)
+        env["AWS_API_MCP_ALLOW_UNRESTRICTED_LOCAL_FILE_ACCESS"] = "unrestricted"
         return env
 
     async def __aenter__(self) -> AwsMcpS3Client:
