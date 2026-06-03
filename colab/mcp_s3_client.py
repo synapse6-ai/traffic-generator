@@ -228,6 +228,13 @@ def parse_call_aws_row(cli_command: str, row: dict[str, Any]) -> S3OperationResu
 
     raw_response = row.get("response")
     if isinstance(raw_response, dict):
+        if raw_response.get("error"):
+            code = raw_response.get("error_code", "")
+            msg = raw_response["error"]
+            label = f"[{code}] {msg}" if code else str(msg)
+            return S3OperationResult(
+                command=cli_command, error=label, response=raw_response,
+            )
         inner = raw_response.get("response")
         if isinstance(inner, dict) and inner.get("error"):
             return S3OperationResult(
